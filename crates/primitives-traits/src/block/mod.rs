@@ -32,8 +32,6 @@ pub trait Block:
     + Eq
     + serde::Serialize
     + for<'a> serde::Deserialize<'a>
-    + alloy_rlp::Encodable
-    + alloy_rlp::Decodable
     + Header
     + Body<
         Self::Header,

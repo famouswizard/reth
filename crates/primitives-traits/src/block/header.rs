@@ -30,6 +30,7 @@ pub trait BlockHeader:
     + alloy_consensus::BlockHeader
     + Sealable
     + InMemorySize
+    + 'static
 {
 }
 
@@ -49,6 +50,7 @@ impl<T> BlockHeader for T where
         + alloy_consensus::BlockHeader
         + Sealable
         + InMemorySize
+        + 'static
 {
 }
 
