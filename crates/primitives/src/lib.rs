@@ -51,6 +51,9 @@ pub use transaction::{
     TransactionSignedEcRecovered, TransactionSignedNoHash, TxHashOrNumber, TxType,
 };
 
+mod eth;
+pub use eth::*;
+
 // Re-exports
 pub use reth_ethereum_forks::*;
 

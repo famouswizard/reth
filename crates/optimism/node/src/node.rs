@@ -5,10 +5,12 @@ use std::sync::Arc;
 use alloy_consensus::Header;
 use reth_basic_payload_builder::{BasicPayloadJobGenerator, BasicPayloadJobGeneratorConfig};
 use reth_chainspec::{EthChainSpec, Hardforks};
+use reth_db::transaction::{DbTx, DbTxMut};
 use reth_evm::{execute::BasicBlockExecutorProvider, ConfigureEvm};
 use reth_network::{NetworkConfig, NetworkHandle, NetworkManager, PeersInfo};
 use reth_node_api::{
-    AddOnsContext, EngineValidator, FullNodeComponents, NodeAddOns, NodePrimitives, PayloadBuilder,
+    AddOnsContext, EngineValidator, FullNodeComponents, FullNodePrimitives, NodeAddOns,
+    PayloadBuilder,
 };
 use reth_node_builder::{
     components::{
@@ -25,8 +27,11 @@ use reth_optimism_evm::{OpEvmConfig, OpExecutionStrategyFactory};
 use reth_optimism_payload_builder::builder::OpPayloadTransactions;
 use reth_optimism_rpc::OpEthApi;
 use reth_payload_builder::{PayloadBuilderHandle, PayloadBuilderService};
-use reth_primitives::{Block, Receipt, TransactionSigned, TxType};
-use reth_provider::CanonStateSubscriptions;
+use reth_primitives::{Block, BlockBody, Receipt, TransactionSigned, TxType};
+use reth_provider::{
+    providers::ChainStorage, BlockBodyWriter, CanonStateSubscriptions, DBProvider, EthStorage,
+    ProviderResult,
+};
 use reth_tracing::tracing::{debug, info};
 use reth_transaction_pool::{
     blobstore::DiskFileBlobStore, CoinbaseTipOrdering, TransactionPool,
@@ -45,13 +50,36 @@ use crate::{
 #[derive(Debug, Default, Clone)]
 pub struct OpPrimitives;
 
-impl NodePrimitives for OpPrimitives {
+impl FullNodePrimitives for OpPrimitives {
     type Block = Block;
     type SignedTx = TransactionSigned;
     type TxType = TxType;
     type Receipt = Receipt;
 }
 
+/// Storage implementation for Optimism.
+#[derive(Debug, Default, Clone)]
+pub struct OpStorage(EthStorage);
+
+impl<Provider: DBProvider<Tx: DbTxMut>> BlockBodyWriter<Provider, BlockBody> for OpStorage {
+    fn write_block_bodies(
+        &self,
+        provider: &Provider,
+        bodies: Vec<(u64, Option<BlockBody>)>,
+    ) -> ProviderResult<()> {
+        self.0.write_block_bodies(provider, bodies)
+    }
+}
+
+impl ChainStorage<OpPrimitives> for OpStorage {
+    type Writer<TX: DbTxMut + DbTx + 'static, Types: NodeTypes<Primitives = OpPrimitives>> = Self;
+
+    fn writer<TX: DbTxMut + DbTx + 'static, Types: NodeTypes<Primitives = OpPrimitives>>(
+        &self,
+    ) -> &Self::Writer<TX, Types> {
+        self
+    }
+}
 /// Type configuration for a regular Optimism node.
 #[derive(Debug, Default, Clone)]
 #[non_exhaustive]
@@ -98,7 +126,14 @@ impl OpNode {
 
 impl<N> Node<N> for OpNode
 where
-    N: FullNodeTypes<Types: NodeTypesWithEngine<Engine = OpEngineTypes, ChainSpec = OpChainSpec>>,
+    N: FullNodeTypes<
+        Types: NodeTypesWithEngine<
+            Engine = OpEngineTypes,
+            ChainSpec = OpChainSpec,
+            Primitives = OpPrimitives,
+            Storage = OpStorage,
+        >,
+    >,
 {
     type ComponentsBuilder = ComponentsBuilder<
         N,
@@ -126,6 +161,7 @@ impl NodeTypes for OpNode {
     type Primitives = OpPrimitives;
     type ChainSpec = OpChainSpec;
     type StateCommitment = MerklePatriciaTrie;
+    type Storage = OpStorage;
 }
 
 impl NodeTypesWithEngine for OpNode {
@@ -152,7 +188,7 @@ impl<N: FullNodeComponents> OpAddOns<N> {
 impl<N> NodeAddOns<N> for OpAddOns<N>
 where
     N: FullNodeComponents<
-        Types: NodeTypes<ChainSpec = OpChainSpec>,
+        Types: NodeTypes<ChainSpec = OpChainSpec, Primitives = OpPrimitives, Storage = OpStorage>,
         PayloadBuilder: PayloadBuilder<PayloadType = <N::Types as NodeTypesWithEngine>::Engine>,
     >,
     OpEngineValidator: EngineValidator<<N::Types as NodeTypesWithEngine>::Engine>,
@@ -170,7 +206,7 @@ where
 impl<N> RethRpcAddOns<N> for OpAddOns<N>
 where
     N: FullNodeComponents<
-        Types: NodeTypes<ChainSpec = OpChainSpec>,
+        Types: NodeTypes<ChainSpec = OpChainSpec, Primitives = OpPrimitives, Storage = OpStorage>,
         PayloadBuilder: PayloadBuilder<PayloadType = <N::Types as NodeTypesWithEngine>::Engine>,
     >,
     OpEngineValidator: EngineValidator<<N::Types as NodeTypesWithEngine>::Engine>,
