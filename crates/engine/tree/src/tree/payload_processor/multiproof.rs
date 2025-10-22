@@ -647,12 +647,14 @@ pub(super) struct MultiProofTask {
     chunk_size: Option<usize>,
     /// Task configuration.
     config: MultiProofConfig,
-    /// Receiver for state root related messages.
-    rx: Receiver<MultiProofMessage>,
+    /// Receiver for state root related messages (prefetch, state updates, finish signal).
+    rx: CrossbeamReceiver<MultiProofMessage>,
     /// Sender for state root related messages.
-    tx: Sender<MultiProofMessage>,
+    tx: CrossbeamSender<MultiProofMessage>,
+    /// Receiver for proof results directly from workers.
+    proof_result_rx: CrossbeamReceiver<ProofResultMessage>,
     /// Sender for state updates emitted by this type.
-    to_sparse_trie: Sender<SparseTrieUpdate>,
+    to_sparse_trie: std::sync::mpsc::Sender<SparseTrieUpdate>,
     /// Proof targets that have been already fetched.
     fetched_proof_targets: MultiProofTargets,
     /// Tracks keys which have been added and removed throughout the entire block.
@@ -683,6 +685,7 @@ impl MultiProofTask {
             config,
             rx,
             tx,
+            proof_result_rx,
             to_sparse_trie,
             fetched_proof_targets: Default::default(),
             multi_added_removed_keys: MultiAddedRemovedKeys::new(),
@@ -692,6 +695,7 @@ impl MultiProofTask {
                 metrics.clone(),
                 proof_worker_handle,
                 max_concurrency,
+                proof_result_tx,
             ),
             metrics,
         }
