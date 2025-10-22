@@ -29,7 +29,11 @@ use std::{
     sync::Arc,
     time::Instant,
 };
-use tracing::{debug, error, trace};
+use tracing::{debug, error, instrument, trace};
+
+/// Default upper bound for inflight multiproof calculations. These would be sitting in the queue
+/// waiting to be processed.
+const DEFAULT_MULTIPROOF_INFLIGHT_LIMIT: usize = 128;
 
 /// A trie update that can be applied to sparse trie alongside the proofs for touched parts of the
 /// state.
@@ -320,8 +324,8 @@ impl MultiproofInput {
 /// availability has been signaled.
 #[derive(Debug)]
 pub struct MultiproofManager {
-    /// Maximum number of concurrent calculations.
-    max_concurrent: usize,
+    /// Maximum number of proof calculations allowed to be inflight at once.
+    inflight_limit: usize,
     /// Currently running calculations.
     inflight: usize,
     /// Queued calculations.
@@ -354,12 +358,11 @@ impl MultiproofManager {
         executor: WorkloadExecutor,
         metrics: MultiProofTaskMetrics,
         proof_worker_handle: ProofWorkerHandle,
-        max_concurrent: usize,
         proof_result_tx: CrossbeamSender<ProofResultMessage>,
     ) -> Self {
         Self {
-            pending: VecDeque::with_capacity(max_concurrent),
-            max_concurrent,
+            pending: VecDeque::with_capacity(DEFAULT_MULTIPROOF_INFLIGHT_LIMIT),
+            inflight_limit: DEFAULT_MULTIPROOF_INFLIGHT_LIMIT,
             executor,
             inflight: 0,
             metrics,
@@ -370,11 +373,10 @@ impl MultiproofManager {
     }
 
     const fn is_full(&self) -> bool {
-        self.inflight >= self.max_concurrent
+        self.inflight >= self.inflight_limit
     }
 
-    /// Spawns a new multiproof calculation or enqueues it for later if
-    /// `max_concurrent` are already inflight.
+    /// Spawns a new multiproof calculation or enqueues it if the inflight limit is reached.
     fn spawn_or_queue(&mut self, input: PendingMultiproofTask) {
         // If there are no proof targets, we can just send an empty multiproof back immediately
         if input.proof_targets_is_empty() {
@@ -635,7 +637,6 @@ impl MultiProofTask {
         executor: WorkloadExecutor,
         proof_worker_handle: ProofWorkerHandle,
         to_sparse_trie: std::sync::mpsc::Sender<SparseTrieUpdate>,
-        max_concurrency: usize,
         chunk_size: Option<usize>,
     ) -> Self {
         let (tx, rx) = unbounded();
@@ -656,7 +657,6 @@ impl MultiProofTask {
                 executor,
                 metrics.clone(),
                 proof_worker_handle,
-                max_concurrency,
                 proof_result_tx,
             ),
             metrics,
@@ -671,6 +671,7 @@ impl MultiProofTask {
     /// Handles request for proof prefetch.
     ///
     /// Returns a number of proofs that were spawned.
+    #[instrument(level = "debug", target = "engine::tree::payload_processor::multiproof", skip_all, fields(accounts = targets.len()))]
     fn on_prefetch_proof(&mut self, targets: MultiProofTargets) -> u64 {
         let proof_targets = self.get_prefetch_proof_targets(targets);
         self.fetched_proof_targets.extend_ref(&proof_targets);
@@ -732,7 +733,7 @@ impl MultiProofTask {
         let all_proofs_processed =
             proofs_processed >= state_update_proofs_requested + prefetch_proofs_requested;
         let no_pending = !self.proof_sequencer.has_pending();
-        debug!(
+        trace!(
             target: "engine::root",
             proofs_processed,
             state_update_proofs_requested,
@@ -797,6 +798,7 @@ impl MultiProofTask {
     /// Handles state updates.
     ///
     /// Returns a number of proofs that were spawned.
+    #[instrument(level = "debug", target = "engine::tree::payload_processor::multiproof", skip(self, update), fields(accounts = update.len()))]
     fn on_state_update(&mut self, source: StateChangeSource, update: EvmState) -> u64 {
         let hashed_state_update = evm_state_to_hashed_post_state(update);
 
@@ -926,6 +928,12 @@ impl MultiProofTask {
     ///      currently being calculated, or if there are any pending proofs in the proof sequencer
     ///      left to be revealed by checking the pending tasks.
     /// 6. This task exits after all pending proofs are processed.
+    #[instrument(
+        level = "debug",
+        name = "MultiProofTask::run",
+        target = "engine::tree::payload_processor::multiproof",
+        skip_all
+    )]
     pub(crate) fn run(mut self) {
         // TODO convert those into fields
         let mut prefetch_proofs_requested = 0;
@@ -1198,7 +1206,7 @@ mod tests {
             ProofWorkerHandle::new(executor.handle().clone(), consistent_view, task_ctx, 1, 1);
         let channel = std::sync::mpsc::channel();
 
-        MultiProofTask::new(config, executor, proof_handle, channel.0, 1, None)
+        MultiProofTask::new(config, executor, proof_handle, channel.0, Some(1))
     }
 
     #[test]
