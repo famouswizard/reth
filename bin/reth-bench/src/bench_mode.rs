@@ -21,6 +21,18 @@ impl BenchMode {
         }
     }
 
+    /// Returns the number of blocks in the range, or None for continuous mode.
+    pub const fn block_count(&self) -> Option<u64> {
+        match self {
+            Self::Continuous => None,
+            Self::Range(range) => {
+                let start = *range.start();
+                let end = *range.end();
+                Some(end.saturating_sub(start).saturating_add(1))
+            }
+        }
+    }
+
     /// Create a [`BenchMode`] from optional `from` and `to` fields.
     pub fn new(from: Option<u64>, to: Option<u64>) -> Result<Self, eyre::Error> {
         // If neither `--from` nor `--to` are provided, we will run the benchmark continuously,
