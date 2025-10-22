@@ -826,7 +826,7 @@ enum AccountWorkerJob {
     /// Account multiproof computation request
     AccountMultiproof {
         /// Account multiproof input parameters
-        input: AccountMultiproofInput,
+        input: Box<AccountMultiproofInput>,
         /// Channel to send result back to original caller
         result_sender: Sender<AccountMultiproofResult>,
     },
@@ -1000,7 +1000,7 @@ impl ProofWorkerHandle {
     ) -> Result<Receiver<AccountMultiproofResult>, ProviderError> {
         let (tx, rx) = channel();
         self.account_work_tx
-            .send(AccountWorkerJob::AccountMultiproof { input, result_sender: tx })
+            .send(AccountWorkerJob::AccountMultiproof { input: Box::new(input), result_sender: tx })
             .map_err(|_| {
                 ProviderError::other(std::io::Error::other("account workers unavailable"))
             })?;
