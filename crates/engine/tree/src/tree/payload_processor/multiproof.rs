@@ -520,7 +520,7 @@ impl MultiproofManager {
                 account_targets,
                 storage_targets,
                 ?source,
-                "Starting multiproof calculation",
+            "Dispatching multiproof to workers"
             );
 
             let start = Instant::now();
